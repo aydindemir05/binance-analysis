@@ -1,0 +1,159 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Binance 15-Minute Volume Analysis</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <style>
+        .hide {
+            display: none;
+        }
+
+        /* Farklı sinyal sayılarına göre renkler */
+        .low-signal {
+            background-color: lightcoral;
+        }
+
+        .medium-signal {
+            background-color: lightblue;
+        }
+
+        .high-signal {
+            background-color: lightgreen;
+        }
+    </style>
+</head>
+<body>
+    <table id="allCoinsTable" border="1">
+        <thead>
+            <tr>
+                <th>Saat</th>
+                <th>Tarih</th>
+                <th>İsim</th>
+                <th>Close</th>
+                <th>Sinyal</th>
+            </tr>
+        </thead>
+        <tbody id="allCoinsTableBody"></tbody>
+    </table>
+
+    <script>
+        const interval = '15m'; // 15 dakikalık mumlar
+        const limit = 100; // Son 100 mum
+        let signalCount = {};
+        let allData = [];
+
+        function calculateSMA(data, period) {
+            let totalVolume = 0;
+            let sma = 0;
+
+            if (data.length >= period) {
+                for (let i = data.length - period; i < data.length; i++) {
+                    totalVolume += parseFloat(data[i][5]);
+                }
+                sma = totalVolume / period;
+            }
+
+            return sma;
+        }
+
+        function fetchData(symbol) {
+            return new Promise((resolve) => {
+                $.ajax({
+                    url: `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+                    success: function (data) {
+                        resolve({ symbol, data });
+                    },
+                });
+            });
+        }
+
+        async function fetchAllData() {
+            const today = new Date().toDateString();
+            const exchangeInfo = await $.ajax({
+                url: 'https://api.binance.com/api/v3/exchangeInfo',
+            });
+            const symbols = exchangeInfo.symbols
+                .filter((symbol) => symbol.symbol.endsWith('USDT'))
+                .map((symbol) => symbol.symbol);
+
+            const promises = symbols.map((symbol) => fetchData(symbol));
+
+            const results = await Promise.all(promises);
+
+            results.forEach((result) => {
+                const { symbol, data } = result;
+                for (let i = 0; i < data.length; i++) {
+                    const [timestamp, open, high, low, close, volume] = data[i];
+                    const date = new Date(timestamp);
+                    const formattedDate = `${date.toLocaleDateString()}`;
+                    const formattedTime = `${date.toLocaleTimeString()}`;
+
+                    const currentDate = date.toDateString();
+
+                    if (currentDate === today) {
+                        const currentVolume = parseFloat(volume);
+                        const sma = calculateSMA(data.slice(0, i + 1), 20);
+
+                        if (i > 0) {
+                            const prevClose = parseFloat(data[i - 1][4]);
+
+                            if (currentVolume > 2 * sma && close > prevClose) {
+                                signalCount[symbol] = (signalCount[symbol] || 0) + 1;
+                                const rowData = {
+                                    time: formattedTime,
+                                    date: formattedDate,
+                                    symbol: symbol,
+                                    close: close,
+                                    signal: signalCount[symbol],
+                                };
+                                allData.push(rowData);
+                            }
+                        }
+                    }
+                }
+            });
+
+            allData.sort((a, b) => {
+                if (a.time > b.time) return -1;
+                if (a.time < b.time) return 1;
+                return 0;
+            }); // Saate göre büyükten küçüğe sırala
+            populateTable();
+        }
+
+        function populateTable() {
+            const tableBody = document.getElementById('allCoinsTableBody');
+            tableBody.innerHTML = '';
+
+            allData.forEach((row) => {
+                let signalClass = '';
+                if (row.signal < 3) {
+                    signalClass = 'low-signal';
+                } else if (row.signal >= 3 && row.signal < 5) {
+                    signalClass = 'medium-signal';
+                } else {
+                    signalClass = 'high-signal';
+                }
+
+                const newRow = document.createElement('tr');
+                newRow.className = signalClass;
+                newRow.innerHTML = `
+                    <td>${row.time}</td>
+                    <td>${row.date}</td>
+                    <td>${row.symbol}</td>
+                    <td>${row.close}</td>
+                    <td>${row.signal}</td>
+                `;
+                tableBody.appendChild(newRow);
+            });
+        }
+
+        $(document).ready(function () {
+            fetchAllData();
+            setInterval(fetchAllData, 1000 * 60 * 15); // Her 15 dakikada bir güncelle
+        });
+    </script>
+</body>
+</html>
